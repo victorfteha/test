@@ -1,0 +1,60 @@
+import itertools
+import matplotlib.pyplot as plt
+import pandas as pd
+import pprint
+import requests
+
+presidential_json = requests.get('https://static01.nyt.com/elections-assets/2020/data/api/2020-11-03/national-map-page/national/president.json').json()
+senate_json = requests.get('https://static01.nyt.com/elections-assets/2020/data/api/2020-11-03/national-map-page/national/senate.json').json()
+
+def collapse_results_by_party(results_by_candidate, candidates):
+    results_by_party = {}
+    for candidate, count in results_by_candidate.iteritems():
+        party = candidates[candidate]['party']
+        results_by_party[party] = results_by_party.get(party, 0) + count
+
+    return results_by_party
+
+def race_json_to_party_county_results(race_json):
+    county_results = []
+    for r in race_json['data']['races']:
+        for candidate in r['candidates']:
+            if candidate['party_id'] == 'republican':
+                candidate['party'] = 'rep'
+            elif candidate['party_id'] == 'democrat':
+                candidate['party'] = 'dem'
+            else:
+                candidate['party'] = 'trd'
+        candidates = { candidate['candidate_key']: candidate for candidate in r['candidates'] }
+
+        for c in r['counties']:
+            c['state'] = r['state_name']
+            c['race_id'] = r['race_id']
+            results = collapse_results_by_party(c['results'], candidates)
+            absentee_results = collapse_results_by_party(c['results_absentee'], candidates)
+            for party in ['rep', 'dem', 'trd']:
+                c['had_{}'.format(party)] = party in results
+                c['results_{}'.format(party)] = results.get(party, 0)
+                c['absentee_results_{}'.format(party)] = absentee_results.get(party, 0)
+
+            c.pop('results_absentee')
+            c.pop('results')
+            county_results.append(c)
+    return county_results
+
+pres_county_results = race_json_to_party_county_results(presidential_json)
+senate_county_results = race_json_to_party_county_results(senate_json)
+
+pres_results_df = pd.DataFrame.from_records(pres_county_results)
+pres_results_df['rep_share'] = pres_results_df['results_rep'] / pres_results_df['votes']
+pres_results_df['dem_share'] = pres_results_df['results_dem'] / pres_results_df['votes']
+pres_results_df['trd_share'] = pres_results_df['results_trd'] / pres_results_df['votes']
+
+senate_results_df = pd.DataFrame.from_records(senate_county_results)
+senate_results_df['rep_share'] = senate_results_df['results_rep'] / senate_results_df['votes']
+senate_results_df['dem_share'] = senate_results_df['results_dem'] / senate_results_df['votes']
+senate_results_df['trd_share'] = senate_results_df['results_trd'] / senate_results_df['votes']
+
+joint_results_df = pres_results_df.merge(senate_results_df, on=['name', 'state'], suffixes=['_pres', '_sen'], how='outer').reset_index()
+
+joint_results_df.to_csv('data/joint_results.csv', encoding='utf-8')
